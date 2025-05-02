@@ -80,7 +80,7 @@ def parse_advanced_search(search_term: str) -> (dict, str):
 
 def filter_dataframe_advanced(df: pd.DataFrame, search_term: str) -> pd.DataFrame:
     """
-    Filter DataFrame based on advanced search syntax and general search.
+    Filter DataFrame based on advanced search syntax and general search, supporting boolean logic (AND, OR, NOT) in general search.
     """
     if not search_term:
         return df
@@ -96,20 +96,56 @@ def filter_dataframe_advanced(df: pd.DataFrame, search_term: str) -> pd.DataFram
             mask &= df[field].str.lower().fillna('').str.contains(value.lower(), na=False)
         elif field in ['year', 'pubdate'] and 'pubdate' in df.columns:
             mask &= df['pubdate'].str.contains(value, na=False)
-    # General search
+    # General search with boolean logic
     if general:
         general = general.lower()
-        general_mask = pd.Series(False, index=df.index)
-        text_columns = ['title', 'abstract', 'bibcode']
-        for col in text_columns:
-            if col in df.columns:
-                general_mask |= df[col].str.lower().fillna('').str.contains(general, na=False)
-        list_columns = ['author', 'keywords']
-        for col in list_columns:
-            if col in df.columns:
-                general_mask |= df[col].apply(lambda x: any(general in str(k).lower() for k in x))
-        mask &= general_mask
+        # Split on OR first
+        or_parts = [part.strip() for part in re.split(r'\s+or\s+', general)]
+        or_masks = []
+        for or_part in or_parts:
+            # Split on AND
+            and_parts = [p.strip() for p in re.split(r'\s+and\s+', or_part)]
+            and_mask = pd.Series(True, index=df.index)
+            for and_part in and_parts:
+                # Handle NOT
+                if ' not ' in and_part:
+                    not_terms = [t.strip() for t in and_part.split(' not ')]
+                    # First term must be present
+                    pos_term = not_terms[0]
+                    not_mask = pd.Series(True, index=df.index)
+                    if pos_term:
+                        not_mask &= _search_any_field(df, pos_term)
+                    # All NOT terms must be absent
+                    for neg_term in not_terms[1:]:
+                        not_mask &= ~_search_any_field(df, neg_term)
+                    and_mask &= not_mask
+                else:
+                    and_mask &= _search_any_field(df, and_part)
+            or_masks.append(and_mask)
+        # Combine all OR masks
+        if or_masks:
+            general_mask = or_masks[0]
+            for m in or_masks[1:]:
+                general_mask |= m
+            mask &= general_mask
     return df[mask]
+
+def _search_any_field(df: pd.DataFrame, term: str) -> pd.Series:
+    """
+    Search for a term in all relevant fields (title, abstract, bibcode, author, keywords).
+    Returns a boolean mask.
+    """
+    term = term.strip().lower()
+    mask = pd.Series(False, index=df.index)
+    text_columns = ['title', 'abstract', 'bibcode']
+    for col in text_columns:
+        if col in df.columns:
+            mask |= df[col].str.lower().fillna('').str.contains(term, na=False)
+    list_columns = ['author', 'keywords']
+    for col in list_columns:
+        if col in df.columns:
+            mask |= df[col].apply(lambda x: any(term in str(k).lower() for k in x))
+    return mask
 
 # ─── MAIN APP ───────────────────────────────────────────────────────────
 def main():
