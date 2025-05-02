@@ -184,11 +184,21 @@ def main():
     # Filter data
     filtered_df = filter_dataframe_advanced(df, search_term)
     
-    # Display results
-    st.markdown(f"### Found {len(filtered_df)} results")
+    # Pagination controls
+    page_size = st.selectbox("Results per page", [10, 25, 50, 100], index=0)
+    total_results = len(filtered_df)
+    total_pages = max(1, (total_results + page_size - 1) // page_size)
+    page_num = st.number_input(
+        "Page", min_value=1, max_value=total_pages, value=1, step=1, format="%d"
+    )
+    start_idx = (page_num - 1) * page_size
+    end_idx = min(start_idx + page_size, total_results)
+    page_df = filtered_df.iloc[start_idx:end_idx]
     
-    # Create expandable sections for each result
-    for idx, row in filtered_df.iterrows():
+    st.markdown(f"### Showing results {start_idx+1}–{end_idx} of {total_results}")
+    
+    # Create expandable sections for each result on the current page
+    for idx, row in page_df.iterrows():
         # Collapsed: title, authors, pubdate
         authors = ", ".join(row['author']) if row['author'] else "No authors available"
         pubdate = row['pubdate'] if pd.notna(row['pubdate']) else "No date available"
