@@ -121,13 +121,29 @@ def main():
     if df.empty:
         st.stop()
     
-    # Search box (concise label, help tooltip)
-    st.text_input(
-        "Advanced search",
-        key="search",
-        help="Examples: year:2000 author:Smith title:Mars (or just type general search terms)"
+    # List searchable fields and examples above the search bar
+    searchable_fields = [
+        "year (from pubdate)",
+        "author",
+        "title",
+        "abstract",
+        "keywords",
+        "collection",
+        "bibcode",
+        "pubdate"
+    ]
+    st.markdown(
+        "**Searchable fields:** " + ", ".join(searchable_fields)
     )
-    search_term = st.session_state["search"]
+    st.markdown(
+        "**Examples:** `year:2000 author:Smith title:Mars` &nbsp;&nbsp;|&nbsp;&nbsp; `Mars exploration` (unfielded search)"
+    )
+    
+    # Search box (no help tooltip, no ? icon)
+    search_term = st.text_input(
+        "Search",
+        key="search"
+    )
     
     # Filter data
     filtered_df = filter_dataframe_advanced(df, search_term)
