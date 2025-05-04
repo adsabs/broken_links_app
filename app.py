@@ -6,6 +6,7 @@ This app provides an interface to:
 1. View broken links metadata from various collections
 2. Search and filter through the metadata
 3. Display detailed information about each broken link
+4. Serve associated PDFs when available
 """
 
 import pandas as pd
@@ -13,10 +14,46 @@ import streamlit as st
 from pathlib import Path
 from typing import Dict, List, Optional
 import re
+import base64
+from io import BytesIO
+import os
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────
 COLLECTION_NAME = "LPI Collection"
 METADATA_FILE = "broken_links_with_metadata.csv"
+PDF_DIR = Path("pdfs")
+
+# ─── PDF HANDLING ─────────────────────────────────────────────────────────
+def get_pdf_url(bibcode: str) -> Optional[str]:
+    """
+    Generate a direct URL for a PDF file.
+    
+    Args:
+        bibcode: Bibcode of the paper
+        
+    Returns:
+        URL string for the PDF if it exists, None otherwise
+    """
+    pdf_path = PDF_DIR / f"{bibcode}.pdf"
+    if not pdf_path.exists():
+        return None
+    
+    # Create a unique URL-friendly name
+    url_name = f"{bibcode.replace('.', '_')}.pdf"
+    return f"/pdf?name={url_name}"
+
+def serve_pdf(pdf_path: Path) -> bytes:
+    """
+    Serve a PDF file.
+    
+    Args:
+        pdf_path: Path to the PDF file
+        
+    Returns:
+        PDF file contents as bytes
+    """
+    with open(pdf_path, "rb") as f:
+        return f.read()
 
 # ─── PAGE CONFIG ───────────────────────────────────────────────────────────
 st.set_page_config(
@@ -147,6 +184,25 @@ def _search_any_field(df: pd.DataFrame, term: str) -> pd.Series:
             mask |= df[col].apply(lambda x: any(term in str(k).lower() for k in x))
     return mask
 
+def display_pdf_section(bibcode: str) -> None:
+    """
+    Display the PDF section with viewer and download options.
+    
+    Args:
+        bibcode: Bibcode of the paper
+    """
+    pdf_url = get_pdf_url(bibcode)
+    if pdf_url:
+        st.markdown("#### PDF")
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            st.markdown(f"[View PDF]({pdf_url})")
+        with col2:
+            st.markdown(f"[Download PDF]({pdf_url})")
+    else:
+        st.markdown("#### PDF")
+        st.markdown("PDF not available")
+
 # ─── MAIN APP ───────────────────────────────────────────────────────────
 def main():
     """Main app function."""
@@ -217,10 +273,9 @@ def main():
                 st.markdown(pubdate)
                 st.markdown("#### Collection")
                 st.markdown(row['collection'])
-                st.markdown("#### Broken Link")
-                st.markdown(f"[{row['url']}]({row['url']})")
                 st.markdown("#### Bibcode")
                 st.markdown(f"[{row['bibcode']}](https://ui.adsabs.harvard.edu/abs/{row['bibcode']})")
+                display_pdf_section(row['bibcode'])
 
 if __name__ == "__main__":
     main() 
