@@ -18,6 +18,8 @@ import base64
 from io import BytesIO
 import os
 
+print(f"[DEBUG] st.query_params at import: {st.query_params}")
+
 # ─── CONFIG ────────────────────────────────────────────────────────────────
 COLLECTION_NAME = "LPI Collection"
 METADATA_FILE = "broken_links_with_metadata.csv"
@@ -55,6 +57,13 @@ def serve_pdf(pdf_path: Path) -> bytes:
     with open(pdf_path, "rb") as f:
         return f.read()
 
+def pdf_available(bibcode: str) -> bool:
+    """
+    Check if a PDF exists for the given bibcode.
+    """
+    pdf_path = PDF_DIR / f"{bibcode}.pdf"
+    return pdf_path.exists()
+
 # ─── PAGE CONFIG ───────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Broken Links on ADS",
@@ -80,6 +89,7 @@ st.markdown("""
 def load_data() -> pd.DataFrame:
     """
     Load and prepare the metadata DataFrame.
+    Adds a 'has_pdf' column for PDF availability.
     
     Returns:
         pd.DataFrame: Processed metadata DataFrame
@@ -96,6 +106,8 @@ def load_data() -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].fillna('').apply(lambda x: [k.strip() for k in x.split(';') if k.strip()])
     
+    # Add has_pdf column
+    df['has_pdf'] = df['bibcode'].apply(lambda bib: (PDF_DIR / f"{bib}.pdf").exists())
     return df
 
 # ─── SEARCH FUNCTIONS ────────────────────────────────────────────────────
@@ -133,6 +145,16 @@ def filter_dataframe_advanced(df: pd.DataFrame, search_term: str) -> pd.DataFram
             mask &= df[field].str.lower().fillna('').str.contains(value.lower(), na=False)
         elif field in ['year', 'pubdate'] and 'pubdate' in df.columns:
             mask &= df['pubdate'].str.contains(value, na=False)
+        elif field == 'has_pdf' and 'has_pdf' in df.columns:
+            if value == '*' or value == '':
+                mask &= df['has_pdf']
+            else:
+                mask &= df['has_pdf'] == (value.lower() in ['true', 'yes', '1'])
+        elif field == 'no_pdf' and 'has_pdf' in df.columns:
+            if value == '*' or value == '':
+                mask &= ~df['has_pdf']
+            else:
+                mask &= df['has_pdf'] == (value.lower() not in ['true', 'yes', '1'])
     # General search with boolean logic
     if general:
         general = general.lower()
@@ -184,29 +206,34 @@ def _search_any_field(df: pd.DataFrame, term: str) -> pd.Series:
             mask |= df[col].apply(lambda x: any(term in str(k).lower() for k in x))
     return mask
 
-def display_pdf_section(bibcode: str) -> None:
+def display_pdf_link(bibcode: str) -> None:
     """
-    Display the PDF section with viewer and download options.
-    
-    Args:
-        bibcode: Bibcode of the paper
+    Display a download button for the PDF matching the bibcode.
     """
-    pdf_url = get_pdf_url(bibcode)
-    if pdf_url:
-        st.markdown("#### PDF")
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            st.markdown(f"[View PDF]({pdf_url})")
-        with col2:
-            st.markdown(f"[Download PDF]({pdf_url})")
+    pdf_path = PDF_DIR / f"{bibcode}.pdf"
+    if pdf_path.exists():
+        with open(pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+        st.download_button(
+            label="Download PDF",
+            data=pdf_bytes,
+            file_name=f"{bibcode}.pdf",
+            mime="application/pdf"
+        )
     else:
-        st.markdown("#### PDF")
         st.markdown("PDF not available")
 
 # ─── MAIN APP ───────────────────────────────────────────────────────────
 def main():
     """Main app function."""
     st.title("Broken Links on ADS")
+    st.markdown(
+        """
+        **PDF Availability Legend:**
+        - ✅ = PDF available for this record
+        - ❌ = No PDF available for this record
+        """
+    )
     
     # Load data
     df = load_data()
@@ -222,7 +249,9 @@ def main():
         "keywords",
         "collection",
         "bibcode",
-        "pubdate"
+        "pubdate",
+        "has_pdf",
+        "no_pdf"
     ]
     st.markdown(
         "**Searchable fields:** " + ", ".join(searchable_fields)
@@ -258,7 +287,8 @@ def main():
         # Collapsed: title, authors, pubdate
         authors = ", ".join(row['author']) if row['author'] else "No authors available"
         pubdate = row['pubdate'] if pd.notna(row['pubdate']) else "No date available"
-        label = f"{row['title']} | {authors} | {pubdate}"
+        pdf_status = "✅" if row['has_pdf'] else "❌"
+        label = f"{pdf_status} {row['title']} | {authors} | {pubdate}"
         with st.expander(label):
             col1, col2 = st.columns([2, 1])
             with col1:
@@ -275,7 +305,9 @@ def main():
                 st.markdown(row['collection'])
                 st.markdown("#### Bibcode")
                 st.markdown(f"[{row['bibcode']}](https://ui.adsabs.harvard.edu/abs/{row['bibcode']})")
-                display_pdf_section(row['bibcode'])
+                display_pdf_link(row['bibcode'])
+                st.markdown(f"**{pdf_status}**")
+                print(f"[DEBUG] Displaying record with bibcode: {row['bibcode']}")
 
 if __name__ == "__main__":
     main() 
