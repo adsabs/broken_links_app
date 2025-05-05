@@ -133,16 +133,23 @@ def filter_dataframe_advanced(df: pd.DataFrame, search_term: str) -> pd.DataFram
     """
     if not search_term:
         return df
+    
+    # Split search term into field-specific filters and general search
     filters, general = parse_advanced_search(search_term)
+    
+    # Start with all records
     mask = pd.Series(True, index=df.index)
-    # Field-specific filters
+    
+    # Apply field-specific filters
     for field, value in filters.items():
         if field in ['author', 'authors'] and 'author' in df.columns:
             mask &= df['author'].apply(lambda x: any(value.lower() in str(a).lower() for a in x))
         elif field in ['keyword', 'keywords'] and 'keywords' in df.columns:
             mask &= df['keywords'].apply(lambda x: any(value.lower() in str(k).lower() for k in x))
         elif field in ['title', 'abstract', 'collection', 'bibcode'] and field in df.columns:
-            mask &= df[field].str.lower().fillna('').str.contains(value.lower(), na=False)
+            mask &= field_filter(df[field], value)
+        elif field == 'url' and 'url' in df.columns:
+            mask &= field_filter(df['url'], value)
         elif field in ['year', 'pubdate'] and 'pubdate' in df.columns:
             mask &= df['pubdate'].str.contains(value, na=False)
         elif field == 'has_pdf' and 'has_pdf' in df.columns:
@@ -155,8 +162,9 @@ def filter_dataframe_advanced(df: pd.DataFrame, search_term: str) -> pd.DataFram
                 mask &= ~df['has_pdf']
             else:
                 mask &= df['has_pdf'] == (value.lower() not in ['true', 'yes', '1'])
-    # General search with boolean logic
-    if general:
+    
+    # Only apply general search if there is no field-specific filter
+    if general and not filters:
         general = general.lower()
         # Split on OR first
         or_parts = [part.strip() for part in re.split(r'\s+or\s+', general)]
@@ -166,20 +174,18 @@ def filter_dataframe_advanced(df: pd.DataFrame, search_term: str) -> pd.DataFram
             and_parts = [p.strip() for p in re.split(r'\s+and\s+', or_part)]
             and_mask = pd.Series(True, index=df.index)
             for and_part in and_parts:
-                # Handle NOT
-                if ' not ' in and_part:
-                    not_terms = [t.strip() for t in and_part.split(' not ')]
-                    # First term must be present
-                    pos_term = not_terms[0]
-                    not_mask = pd.Series(True, index=df.index)
-                    if pos_term:
-                        not_mask &= _search_any_field(df, pos_term)
-                    # All NOT terms must be absent
-                    for neg_term in not_terms[1:]:
-                        not_mask &= ~_search_any_field(df, neg_term)
-                    and_mask &= not_mask
+                # Handle NOT and parentheses for nested logic
+                part = and_part.strip()
+                if part.startswith('not '):
+                    sub_term = part[4:].strip()
+                    and_mask &= ~_search_any_field(df, sub_term)
+                elif part.startswith('(') and part.endswith(')'):
+                    # Recursively handle nested boolean logic
+                    nested = part[1:-1].strip()
+                    nested_mask = filter_dataframe_advanced(df, nested).index
+                    and_mask &= df.index.isin(nested_mask)
                 else:
-                    and_mask &= _search_any_field(df, and_part)
+                    and_mask &= _search_any_field(df, part)
             or_masks.append(and_mask)
         # Combine all OR masks
         if or_masks:
@@ -187,6 +193,7 @@ def filter_dataframe_advanced(df: pd.DataFrame, search_term: str) -> pd.DataFram
             for m in or_masks[1:]:
                 general_mask |= m
             mask &= general_mask
+    
     return df[mask]
 
 def _search_any_field(df: pd.DataFrame, term: str) -> pd.Series:
@@ -205,6 +212,35 @@ def _search_any_field(df: pd.DataFrame, term: str) -> pd.Series:
         if col in df.columns:
             mask |= df[col].apply(lambda x: any(term in str(k).lower() for k in x))
     return mask
+
+def field_filter(series: pd.Series, value: str) -> pd.Series:
+    """
+    Generalized field filter supporting NOT/! and * wildcards.
+    Returns a boolean mask.
+    """
+    val = value.lower().strip()
+    is_not = False
+    if val.startswith('not '):
+        is_not = True
+        val = val[4:].strip()
+    elif val.startswith('!'):
+        is_not = True
+        val = val[1:].strip()
+    
+    # Convert * to regex pattern
+    pattern = re.escape(val).replace('\\*', '.*')
+    
+    # Create mask for matching values
+    match_mask = series.str.lower().fillna('').str.contains(pattern, na=False, regex=True)
+    
+    # For NOT conditions, return True for:
+    # 1. Records that don't match the pattern
+    # 2. Records with NaN values
+    # 3. Records with empty strings
+    if is_not:
+        return ~match_mask | series.isna() | (series.str.strip().eq(''))
+    else:
+        return match_mask
 
 def display_pdf_link(bibcode: str) -> None:
     """
@@ -232,6 +268,13 @@ def main():
         **PDF Availability Legend:**
         - ✅ = PDF available for this record
         - ❌ = No PDF available for this record
+        
+        **Search Tips:**
+        - Use `field:value` to search specific fields (e.g. `url:leag*`)
+        - Use `*` as a wildcard (e.g. `url:leag*` matches any URL containing 'leag')
+        - Use `!` for negation (e.g. `url:!leag*` to find URLs not containing 'leag')
+        - Use `AND`, `OR`, and parentheses for complex/nested boolean logic (e.g. `!keyword AND (keyword OR keyword)`)
+        - Searchable fields include: year, author, title, abstract, keywords, collection, bibcode, pubdate, has_pdf, no_pdf, url
         """
     )
     
